@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { parseBlob } from "music-metadata-browser";
 
 type Track = { src: string; title: string; artist: string; cover?: string | null };
-type RowProps = Track & { idx: number };
+type RowProps = Track;
 
 function baseName(path: string) {
   const f = path.split("/").pop() || "";
@@ -49,22 +49,25 @@ export default function AudioList({ files }: { files: string[] }) {
           title = (mm.common.title || title).trim();
           if (mm.common.artist) artist = mm.common.artist;
           if (!cover && mm.common.picture?.length) {
-          // coerce types so TS chills
-          const pic = mm.common.picture[0] as { data: any; format?: string };
-          const data: any = pic.data;
+          const pic = mm.common.picture[0] as {
+            data: ArrayBuffer | Uint8Array | ArrayBufferView;
+            format?: string;
+          };
 
-          // normalize to Uint8Array without instanceof
-          const bytes = data?.buffer
-            ? new Uint8Array(data.buffer) // handles Buffer/TypedArray
-            : data instanceof ArrayBuffer
-            ? new Uint8Array(data)
-            : new Uint8Array(data as any); // final fallback
+          // normalize to Uint8Array without using `any`
+          const bytes: Uint8Array =
+            pic.data instanceof Uint8Array
+              ? pic.data
+              : pic.data instanceof ArrayBuffer
+              ? new Uint8Array(pic.data)
+              : new Uint8Array((pic.data as ArrayBufferView).buffer);
 
           const blob = new Blob([bytes], { type: pic.format || "image/jpeg" });
           const url = URL.createObjectURL(blob);
           blobs.push(url);
           cover = url;
         }
+
 
 
         } catch {}
@@ -90,7 +93,7 @@ export default function AudioList({ files }: { files: string[] }) {
     <ul className="list-none p-0 m-0 space-y-4">
       {tracks.map((t, i) => (
         <li key={t.src}>
-          <Row idx={i + 1} {...t} />
+          <Row {...t} />
         </li>
       ))}
       {tracks.length === 0 && (
@@ -100,7 +103,7 @@ export default function AudioList({ files }: { files: string[] }) {
   );
 }
 
-function Row({ idx, src, title, artist, cover }: RowProps) {
+function Row({ src, title, artist, cover }: RowProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
