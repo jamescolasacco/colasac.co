@@ -54,19 +54,25 @@ export default function AudioList({ files }: { files: string[] }) {
             format?: string;
           };
 
-          // normalize to Uint8Array without using `any`
-          const bytes: Uint8Array =
+          // normalize to a Uint8Array
+          const view =
             pic.data instanceof Uint8Array
               ? pic.data
               : pic.data instanceof ArrayBuffer
               ? new Uint8Array(pic.data)
               : new Uint8Array((pic.data as ArrayBufferView).buffer);
 
-          const blob = new Blob([bytes], { type: pic.format || "image/jpeg" });
+          // copy into a real ArrayBuffer (not SharedArrayBuffer-typed)
+          const ab = new ArrayBuffer(view.byteLength);
+          new Uint8Array(ab).set(view);
+
+          const blob = new Blob([ab], { type: pic.format || "image/jpeg" });
           const url = URL.createObjectURL(blob);
           blobs.push(url);
           cover = url;
         }
+
+
 
 
 
