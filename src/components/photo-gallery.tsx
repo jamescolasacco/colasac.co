@@ -1,26 +1,39 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-// lazy exif parser
+// src/components/photo-gallery.tsx (top)
+
+type ExifData = {
+  FNumber?: number;
+  ExposureTime?: number;
+  ISO?: number;
+  DateTimeOriginal?: Date;
+  CreateDate?: Date;
+};
+type Exifr = {
+  parse: (input: string, opts?: { pick?: (keyof ExifData)[] }) => Promise<ExifData>;
+};
+
 async function exifPick(url: string) {
   try {
-    const exifr = (await import("exifr")).default as any;
-    const d = await exifr.parse(url, {
+    const mod = (await import("exifr")) as unknown as Exifr;
+    const d = await mod.parse(url, {
       pick: ["FNumber", "ExposureTime", "ISO", "DateTimeOriginal", "CreateDate"],
     });
     const taken =
-      (d?.DateTimeOriginal instanceof Date ? d.DateTimeOriginal : undefined) ||
-      (d?.CreateDate instanceof Date ? d.CreateDate : undefined);
+      (d.DateTimeOriginal instanceof Date ? d.DateTimeOriginal : undefined) ||
+      (d.CreateDate instanceof Date ? d.CreateDate : undefined);
     return {
-      f: typeof d?.FNumber === "number" ? d.FNumber : undefined,
-      t: typeof d?.ExposureTime === "number" ? d.ExposureTime : undefined,
-      iso: typeof d?.ISO === "number" ? d.ISO : undefined,
+      f: typeof d.FNumber === "number" ? d.FNumber : undefined,
+      t: typeof d.ExposureTime === "number" ? d.ExposureTime : undefined,
+      iso: typeof d.ISO === "number" ? d.ISO : undefined,
       taken: taken ? taken.getTime() : undefined,
     };
   } catch {
     return {};
   }
 }
+
 
 function fmtExposure(t?: number) {
   if (!t) return undefined;
