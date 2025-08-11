@@ -49,11 +49,24 @@ export default function AudioList({ files }: { files: string[] }) {
           title = (mm.common.title || title).trim();
           if (mm.common.artist) artist = mm.common.artist;
           if (!cover && mm.common.picture?.length) {
-            const pic = mm.common.picture[0];
-            const url = URL.createObjectURL(new Blob([pic.data], { type: pic.format || "image/jpeg" }));
-            blobs.push(url);
-            cover = url;
-          }
+          // coerce types so TS chills
+          const pic = mm.common.picture[0] as { data: any; format?: string };
+          const data: any = pic.data;
+
+          // normalize to Uint8Array without instanceof
+          const bytes = data?.buffer
+            ? new Uint8Array(data.buffer) // handles Buffer/TypedArray
+            : data instanceof ArrayBuffer
+            ? new Uint8Array(data)
+            : new Uint8Array(data as any); // final fallback
+
+          const blob = new Blob([bytes], { type: pic.format || "image/jpeg" });
+          const url = URL.createObjectURL(blob);
+          blobs.push(url);
+          cover = url;
+        }
+
+
         } catch {}
         out.push({ src, title, artist, cover });
       }
