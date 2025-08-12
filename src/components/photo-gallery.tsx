@@ -1,79 +1,69 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import NextImage from "next/image"; // <-- rename
 
-// src/components/photo-gallery.tsx (top)
+type Meta = { thumb: string; full: string; ar: number };
+type RowItem = { thumb: string; full: string; w: number; h: number };
+type Row = { items: RowItem[]; centered: boolean };
 
-type ExifData = {
-  FNumber?: number;
-  ExposureTime?: number;
-  ISO?: number;
-  DateTimeOriginal?: Date;
-  CreateDate?: Date;
-};
-type Exifr = {
-  parse: (input: string, opts?: { pick?: (keyof ExifData)[] }) => Promise<ExifData>;
-};
+type ExifData = { f?: number; t?: number; iso?: number };
+type Exifr = { parse: (input: string, opts?: { pick?: ("FNumber"|"ExposureTime"|"ISO"|"DateTimeOriginal"|"CreateDate")[] }) => Promise<any> };
 
-async function exifPick(url: string) {
+async function exifPick(url: string): Promise<ExifData> {
   try {
     const mod = (await import("exifr")) as unknown as Exifr;
-    const d = await mod.parse(url, {
-      pick: ["FNumber", "ExposureTime", "ISO", "DateTimeOriginal", "CreateDate"],
-    });
-    const taken =
-      (d.DateTimeOriginal instanceof Date ? d.DateTimeOriginal : undefined) ||
-      (d.CreateDate instanceof Date ? d.CreateDate : undefined);
+    const d = await mod.parse(url, { pick: ["FNumber","ExposureTime","ISO"] });
     return {
-      f: typeof d.FNumber === "number" ? d.FNumber : undefined,
-      t: typeof d.ExposureTime === "number" ? d.ExposureTime : undefined,
-      iso: typeof d.ISO === "number" ? d.ISO : undefined,
-      taken: taken ? taken.getTime() : undefined,
+      f: typeof d?.FNumber === "number" ? d.FNumber : undefined,
+      t: typeof d?.ExposureTime === "number" ? d.ExposureTime : undefined,
+      iso: typeof d?.ISO === "number" ? d.ISO : undefined,
     };
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
-
-
 function fmtExposure(t?: number) {
-  if (!t) return undefined;
+  if (!t) return "—";
   if (t >= 1) return `${t.toFixed(1)}s`;
-  const d = Math.round(1 / t);
-  return `1/${d}s`;
+  return `1/${Math.round(1 / t)}s`;
 }
 
-type Meta = {
-  thumb: string;
-  full: string;
-  ar: number;
-  taken?: number;
-};
-type RowItem = { thumb: string; full: string; w: number; h: number };
-
-type Row = { items: RowItem[]; centered: boolean };
+/* tiny helper: lazy render children only when in view */
+function InView({
+  children,
+  rootMargin = "200px",
+}: { children: (visible: boolean) => React.ReactNode; rootMargin?: string }) {
+  const [vis, setVis] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([e]) => e.isIntersecting && (setVis(true), io.disconnect()),
+      { rootMargin }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [rootMargin]);
+  return <div ref={ref}>{children(vis)}</div>;
+}
 
 export default function PhotoGallery({
   images,
-  targetRowHeight = 300, // row target height
-  gap = 20,              // space between tiles
-  topOffset = 120,       // push grid down from fixed logo
-  sort = "desc",         // "desc" newest first, "asc" oldest first
+  targetRowHeight = 300,
+  gap = 20,
+  topOffset = 120,
 }: {
   images: { thumb: string; full: string }[];
   targetRowHeight?: number;
   gap?: number;
   topOffset?: number;
-  sort?: "asc" | "desc";
 }) {
   const [metas, setMetas] = useState<Meta[]>([]);
   const [open, setOpen] = useState<string | null>(null);
-  const [exif, setExif] = useState<{ f?: number; t?: number; iso?: number }>({});
-  const exifCache = useRef<Record<string, { f?: number; t?: number; iso?: number; taken?: number }>>({});
-
+  const [exif, setExif] = useState<ExifData>({});
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState<number>(0);
+  const [width, setWidth] = useState(0);
 
-  // measure container width
+  // measure container
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -82,60 +72,34 @@ export default function PhotoGallery({
     return () => ro.disconnect();
   }, []);
 
-  // load aspect ratios + exif date to enable sorting
+  // load only AR from thumbnails (fast)
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const metas = await Promise.all(
-      images.map(
-        ({ thumb, full }) =>
-          new Promise<Meta>(async (res) => {
-            const img = new Image();
-            img.onload = async () => {
-              let taken = exifCache.current[full]?.taken;
-              if (taken === undefined) {
-                const picked = await exifPick(full);
-                taken = picked.taken;
-                exifCache.current[full] = { ...(exifCache.current[full] || {}), taken };
-              }
+      const out = await Promise.all(
+        images.map(({ thumb, full }) =>
+          new Promise<Meta>((res) => {
+            const img = new window.Image(); // <-- use DOM Image
+            img.onload = () =>
               res({
                 thumb,
                 full,
                 ar: (img.naturalWidth || 1) / (img.naturalHeight || 1),
-                taken,
               });
-            };
-            img.onerror = async () => {
-              let taken = exifCache.current[full]?.taken;
-              if (taken === undefined) {
-                const picked = await exifPick(full);
-                taken = picked.taken;
-                exifCache.current[full] = { ...(exifCache.current[full] || {}), taken };
-              }
-              res({ thumb, full, ar: 1, taken });
-            };
+            img.onerror = () => res({ thumb, full, ar: 1 });
             img.src = thumb;
           })
-      )
-    );
+        )
+      );
 
-      if (cancelled) return;
-
-      // sort by date taken if present
-      const sorted = metas.slice().sort((a, b) => {
-        const ad = a.taken ?? 0;
-        const bd = b.taken ?? 0;
-        return sort === "desc" ? bd - ad : ad - bd;
-      });
-
-      setMetas(sorted);
+      if (!cancelled) setMetas(out);
     })();
     return () => {
       cancelled = true;
     };
-  }, [images, sort]);
+  }, [images]);
 
-  // layout rows (justified), center the last not-full row
+  // lay out justified rows
   const rows: Row[] = useMemo(() => {
     if (!width || metas.length === 0) return [];
     const out: Row[] = [];
@@ -144,25 +108,14 @@ export default function PhotoGallery({
     let arSum = 0;
 
     const pushRow = (r: Meta[], isLast: boolean) => {
-      if (r.length === 0) return;
+      if (!r.length) return;
       const gaps = gap * (r.length - 1);
       const baseW = r.reduce((s, it) => s + it.ar * targetRowHeight, 0);
-
-      // if row exceeds width, scale to justify; if last row and small, don't stretch
-      const shouldJustify = baseW + gaps > maxW && !isLast;
-      const scale = shouldJustify ? (maxW - gaps) / baseW : 1;
+      const justify = baseW + gaps > maxW && !isLast;
+      const scale = justify ? (maxW - gaps) / baseW : 1;
       const h = Math.max(160, targetRowHeight * scale);
-      const items = r.map((it, idx) => ({
-        thumb: it.thumb,
-        full: it.full,
-        w: it.ar * h,
-        h,
-        _k: `${it.full}-${h}-${idx}`, // if you prefer: use this as key
-      }));
-
-
-
-      out.push({ items, centered: !shouldJustify }); // center if not justified (typically the last row)
+      const items = r.map((it) => ({ thumb: it.thumb, full: it.full, w: it.ar * h, h }));
+      out.push({ items, centered: !justify });
     };
 
     metas.forEach((m, idx) => {
@@ -174,71 +127,119 @@ export default function PhotoGallery({
         row = [];
         arSum = 0;
       }
-      // push final row at the end
       if (idx === metas.length - 1) pushRow(row, true);
     });
 
     return out;
   }, [metas, width, gap, targetRowHeight]);
 
-  // open + fetch detailed exif for display (cached)
-  const onOpen = async (src: string) => {
-    setOpen(src);
-    if (exifCache.current[src]?.f !== undefined) {
-      const { f, t, iso } = exifCache.current[src];
-      setExif({ f, t, iso });
-      return;
-    }
-    setExif({});
-    const picked = await exifPick(src);
-    exifCache.current[src] = { ...(exifCache.current[src] || {}), ...picked };
-    const { f, t, iso } = picked;
-    setExif({ f, t, iso });
+const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+
+const onOpen = async (src: string) => {
+  setOpen(src);
+  setExif({});
+
+  const tmp = new window.Image();
+  tmp.onload = () => {
+    const iw = tmp.naturalWidth || 1;
+    const ih = tmp.naturalHeight || 1;
+
+    const maxW = Math.min(window.innerWidth * 0.92, 1400);
+    const maxH = Math.min(window.innerHeight * 0.90, 1100);
+
+    const scale = Math.min(maxW / iw, maxH / ih, 1); // fit exactly
+    const w = Math.round(iw * scale);
+    const h = Math.round(ih * scale);
+    setBox({ w, h });
   };
+  tmp.src = src;
+
+  const picked = await exifPick(src);
+  setExif(picked);
+};
+
 
   return (
     <>
       <div ref={wrapRef} className="jg-wrap" style={{ marginTop: topOffset }}>
         {rows.map((r, i) => (
-          <div key={i} className={`jg-row${r.centered ? " jg-row--center" : ""}`} style={{ gap }}>
+          <div
+            key={i}
+            className={`jg-row${r.centered ? " jg-row--center" : ""}`}
+            style={{ gap }}
+          >
             {r.items.map((it, j) => (
-              <button
-                key={`${i}-${j}-${it.full}`} /* unique per sibling */
-                className="jg-tile"
-                style={{ width: it.w, height: it.h }}
-                onClick={() => onOpen(it.full)}
-                aria-label="open image"
-              >
-                <img src={it.thumb} alt="" loading="lazy" decoding="async" />
-              </button>
+              <InView key={`${i}-${j}-${it.full}`}>
+                {(visible) => (
+                  <button
+                    className="jg-tile relative overflow-hidden"
+                    style={{ width: it.w, height: it.h }}
+                    onClick={() => onOpen(it.full)}
+                    aria-label="open image"
+                  >
+                    {/* thumb only loads once visible */}
+                    {visible && (
+                      <div className="absolute inset-0">
+                        <NextImage
+                          src={it.thumb}
+                          alt=""
+                          fill
+                          sizes={`${Math.ceil(it.w)}px`}
+                          priority={false}
+                          placeholder="empty"
+                          style={{ objectFit: "cover" }}
+                        />
+
+                      </div>
+                    )}
+                  </button>
+                )}
+              </InView>
             ))}
           </div>
         ))}
 
         {rows.length === 0 && (
-          <p className="opacity-70 text-sm">
-            loading...
-          </p>
+          <p className="opacity-70 text-sm">loading…</p>
         )}
       </div>
 
       {open && (
         <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setOpen(null)}>
           <div className="lightbox-inner" onClick={(e) => e.stopPropagation()}>
-            <img src={open} alt="" />
-            <div className="exif">
+            <div
+              className="mx-auto"
+              style={{
+                width: box?.w ?? Math.min(window.innerWidth * 0.92, 1400),
+                height: box?.h ?? Math.min(window.innerHeight * 0.90, 1100),
+              }}
+            >
+              {box && (
+                <NextImage
+                  src={open}
+                  alt=""
+                  width={box.w}
+                  height={box.h}
+                  sizes={`${box.w}px`}
+                  priority
+                  style={{ display: "block", width: "100%", height: "100%" }}
+                />
+              )}
+            </div>
+
+            <div className="exif mt-3 text-center">
               <span>{exif.f ? `f/${exif.f.toFixed(1)}` : "f/—"}</span>
-              <span>·</span>
-              <span>{exif.t ? fmtExposure(exif.t) : "—"}</span>
-              <span>·</span>
+              <span> · </span>
+              <span>{fmtExposure(exif.t)}</span>
+              <span> · </span>
               <span>{exif.iso ? `ISO ${exif.iso}` : "ISO —"}</span>
             </div>
           </div>
-          <button className="lightbox-close" aria-label="close" onClick={() => setOpen(null)}>
-            ×
-          </button>
+          <button className="lightbox-close" aria-label="close" onClick={() => setOpen(null)}>×</button>
         </div>
       )}
+
+
     </>
   );
 }
