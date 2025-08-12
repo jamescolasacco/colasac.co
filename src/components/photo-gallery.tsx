@@ -1,43 +1,60 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import NextImage from "next/image"; // <-- rename
+import NextImage from "next/image";
 
 type Meta = { thumb: string; full: string; ar: number };
 type RowItem = { thumb: string; full: string; w: number; h: number };
 type Row = { items: RowItem[]; centered: boolean };
 
 type ExifData = { f?: number; t?: number; iso?: number };
-type Exifr = { parse: (input: string, opts?: { pick?: ("FNumber"|"ExposureTime"|"ISO"|"DateTimeOriginal"|"CreateDate")[] }) => Promise<any> };
+type Exifr = {
+  parse: (
+    input: string,
+    opts?: { pick?: ("FNumber" | "ExposureTime" | "ISO")[] }
+  ) => Promise<unknown>; // no `any`
+};
 
 async function exifPick(url: string): Promise<ExifData> {
   try {
     const mod = (await import("exifr")) as unknown as Exifr;
-    const d = await mod.parse(url, { pick: ["FNumber","ExposureTime","ISO"] });
+    const raw = await mod.parse(url, { pick: ["FNumber", "ExposureTime", "ISO"] });
+    const r = (raw ?? {}) as Record<string, unknown>;
     return {
-      f: typeof d?.FNumber === "number" ? d.FNumber : undefined,
-      t: typeof d?.ExposureTime === "number" ? d.ExposureTime : undefined,
-      iso: typeof d?.ISO === "number" ? d.ISO : undefined,
+      f: typeof r.FNumber === "number" ? r.FNumber : undefined,
+      t: typeof r.ExposureTime === "number" ? r.ExposureTime : undefined,
+      iso: typeof r.ISO === "number" ? r.ISO : undefined,
     };
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
+
 function fmtExposure(t?: number) {
   if (!t) return "—";
   if (t >= 1) return `${t.toFixed(1)}s`;
   return `1/${Math.round(1 / t)}s`;
 }
 
-/* tiny helper: lazy render children only when in view */
+/* lazy render child only when in view */
 function InView({
   children,
   rootMargin = "200px",
-}: { children: (visible: boolean) => React.ReactNode; rootMargin?: string }) {
+}: {
+  children: (visible: boolean) => React.ReactNode;
+  rootMargin?: string;
+}) {
   const [vis, setVis] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const io = new IntersectionObserver(
-      ([e]) => e.isIntersecting && (setVis(true), io.disconnect()),
+      ([e]) => {
+        if (e.isIntersecting) {
+          setVis(true);
+          io.disconnect();
+        }
+      },
       { rootMargin }
     );
     io.observe(el);
@@ -77,9 +94,9 @@ export default function PhotoGallery({
     let cancelled = false;
     (async () => {
       const out = await Promise.all(
-        images.map(({ thumb, full }) =>
+        images.map(({ thumb, full }): Promise<Meta> =>
           new Promise<Meta>((res) => {
-            const img = new window.Image(); // <-- use DOM Image
+            const img = new window.Image();
             img.onload = () =>
               res({
                 thumb,
@@ -91,7 +108,6 @@ export default function PhotoGallery({
           })
         )
       );
-
       if (!cancelled) setMetas(out);
     })();
     return () => {
@@ -114,7 +130,12 @@ export default function PhotoGallery({
       const justify = baseW + gaps > maxW && !isLast;
       const scale = justify ? (maxW - gaps) / baseW : 1;
       const h = Math.max(160, targetRowHeight * scale);
-      const items = r.map((it) => ({ thumb: it.thumb, full: it.full, w: it.ar * h, h }));
+      const items: RowItem[] = r.map((it) => ({
+        thumb: it.thumb,
+        full: it.full,
+        w: it.ar * h,
+        h,
+      }));
       out.push({ items, centered: !justify });
     };
 
@@ -133,51 +154,47 @@ export default function PhotoGallery({
     return out;
   }, [metas, width, gap, targetRowHeight]);
 
-const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  // lightbox sizing
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
 
-const onOpen = async (src: string) => {
-  setOpen(src);
-  setExif({});
+  const onOpen = async (src: string) => {
+    setOpen(src);
+    setExif({});
+    const tmp = new window.Image();
+    tmp.onload = () => {
+      const iw = tmp.naturalWidth || 1;
+      const ih = tmp.naturalHeight || 1;
+      const maxW = Math.min(window.innerWidth * 0.92, 1400);
+      const maxH = Math.min(window.innerHeight * 0.9, 1100);
+      const scale = Math.min(maxW / iw, maxH / ih, 1);
+      const w = Math.round(iw * scale);
+      const h = Math.round(ih * scale);
+      setBox({ w, h });
+    };
+    tmp.src = src;
 
-  const tmp = new window.Image();
-  tmp.onload = () => {
-    const iw = tmp.naturalWidth || 1;
-    const ih = tmp.naturalHeight || 1;
-
-    const maxW = Math.min(window.innerWidth * 0.92, 1400);
-    const maxH = Math.min(window.innerHeight * 0.90, 1100);
-
-    const scale = Math.min(maxW / iw, maxH / ih, 1); // fit exactly
-    const w = Math.round(iw * scale);
-    const h = Math.round(ih * scale);
-    setBox({ w, h });
+    const picked = await exifPick(src);
+    setExif(picked);
   };
-  tmp.src = src;
-
-  const picked = await exifPick(src);
-  setExif(picked);
-};
-
 
   return (
     <>
       <div ref={wrapRef} className="jg-wrap" style={{ marginTop: topOffset }}>
-        {rows.map((r, i) => (
+        {rows.map((r: Row, i: number) => (
           <div
             key={i}
             className={`jg-row${r.centered ? " jg-row--center" : ""}`}
             style={{ gap }}
           >
-            {r.items.map((it, j) => (
+            {r.items.map((it: RowItem, j: number) => (
               <InView key={`${i}-${j}-${it.full}`}>
-                {(visible) => (
+                {(visible: boolean) => (
                   <button
                     className="jg-tile relative overflow-hidden"
                     style={{ width: it.w, height: it.h }}
                     onClick={() => onOpen(it.full)}
                     aria-label="open image"
                   >
-                    {/* thumb only loads once visible */}
                     {visible && (
                       <div className="absolute inset-0">
                         <NextImage
@@ -189,7 +206,6 @@ const onOpen = async (src: string) => {
                           placeholder="empty"
                           style={{ objectFit: "cover" }}
                         />
-
                       </div>
                     )}
                   </button>
@@ -211,7 +227,7 @@ const onOpen = async (src: string) => {
               className="mx-auto"
               style={{
                 width: box?.w ?? Math.min(window.innerWidth * 0.92, 1400),
-                height: box?.h ?? Math.min(window.innerHeight * 0.90, 1100),
+                height: box?.h ?? Math.min(window.innerHeight * 0.9, 1100),
               }}
             >
               {box && (
@@ -235,11 +251,11 @@ const onOpen = async (src: string) => {
               <span>{exif.iso ? `ISO ${exif.iso}` : "ISO —"}</span>
             </div>
           </div>
-          <button className="lightbox-close" aria-label="close" onClick={() => setOpen(null)}>×</button>
+          <button className="lightbox-close" aria-label="close" onClick={() => setOpen(null)}>
+            ×
+          </button>
         </div>
       )}
-
-
     </>
   );
 }
